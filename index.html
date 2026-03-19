@@ -637,17 +637,17 @@ function skEmoji(id){const map={'#cc1122':'🟥','#607898':'⬜','#2d5a27':'🟩
 // ═══════════════════════════════════════════════════════════════
 const WP={
   fists:  {n:'FISTS',    ico:'👊',dmg:8,  rng:68, spd:1.0, am:0, type:'melee',  r:'common',p:0,   col:'#ff6600', drop:0},
-  sword:  {n:'SWORD',    ico:'⚔️', dmg:18, rng:88, spd:.85, am:0, type:'melee',  r:'common',p:0,   col:'#c8dde8', drop:22},
-  axe:    {n:'AXE',      ico:'🪓', dmg:28, rng:74, spd:.55, am:0, type:'melee',  r:'rare',  p:350, col:'#aa6600', drop:14},
-  katana: {n:'KATANA',   ico:'🗡️', dmg:20, rng:102,spd:1.2, am:0, type:'melee',  r:'rare',  p:350, col:'#88bbcc', drop:14},
-  hammer: {n:'HAMMER',   ico:'🔨', dmg:44, rng:60, spd:.33, am:0, type:'melee',  r:'epic',  p:800, col:'#ddaa00', drop:8},
-  pistol: {n:'PISTOL',   ico:'🔫', dmg:14, rng:400,spd:1.0, am:12,type:'gun',   r:'common',p:0,   col:'#aaaaaa', drop:20},
-  shotgun:{n:'SHOTGUN',  ico:'💥', dmg:10, rng:188,spd:.55, am:6, type:'gun',   r:'rare',  p:300, col:'#cc6600', drop:14,pl:5},
-  smg:    {n:'SMG',      ico:'🔫', dmg:7,  rng:288,spd:2.2, am:35,type:'gun',   r:'rare',  p:450, col:'#ff8800', drop:12,auto:1},
-  sniper: {n:'SNIPER',   ico:'🎯', dmg:55, rng:900,spd:.28, am:5, type:'gun',   r:'epic',  p:800, col:'#00ffcc', drop:6},
-  grenade:{n:'GRENADE',  ico:'💣', dmg:50, rng:298,spd:.65, am:4, type:'explosive',r:'epic',p:600, col:'#88bb00', drop:5},
-  rocket: {n:'ROCKET',   ico:'🚀', dmg:75, rng:548,spd:.44, am:3, type:'explosive',r:'leg', p:0,   col:'#ff4400', drop:3,ct:1},
-  zapper: {n:'ZAPPER',   ico:'⚡', dmg:18, rng:358,spd:1.8, am:25,type:'gun',   r:'leg',   p:0,   col:'#ffff00', drop:3,auto:1,ct:1},
+  sword:  {n:'SWORD',    ico:'⚔️', dmg:18, rng:88, spd:.85, am:0, type:'melee',  r:'common',p:0,   col:'#c8dde8', drop:60},
+  axe:    {n:'AXE',      ico:'🪓', dmg:28, rng:74, spd:.55, am:0, type:'melee',  r:'rare',  p:350, col:'#aa6600', drop:45},
+  katana: {n:'KATANA',   ico:'🗡️', dmg:20, rng:102,spd:1.2, am:0, type:'melee',  r:'rare',  p:350, col:'#88bbcc', drop:45},
+  hammer: {n:'HAMMER',   ico:'🔨', dmg:44, rng:60, spd:.33, am:0, type:'melee',  r:'epic',  p:800, col:'#ddaa00', drop:30},
+  pistol: {n:'PISTOL',   ico:'🔫', dmg:14, rng:400,spd:1.0, am:12,type:'gun',   r:'common',p:0,   col:'#aaaaaa', drop:55},
+  shotgun:{n:'SHOTGUN',  ico:'💥', dmg:10, rng:188,spd:.55, am:6, type:'gun',   r:'rare',  p:300, col:'#cc6600', drop:45,pl:5},
+  smg:    {n:'SMG',      ico:'🔫', dmg:7,  rng:288,spd:2.2, am:35,type:'gun',   r:'rare',  p:450, col:'#ff8800', drop:40,auto:1},
+  sniper: {n:'SNIPER',   ico:'🎯', dmg:55, rng:900,spd:.28, am:5, type:'gun',   r:'epic',  p:800, col:'#00ffcc', drop:25},
+  grenade:{n:'GRENADE',  ico:'💣', dmg:50, rng:298,spd:.65, am:4, type:'explosive',r:'epic',p:600, col:'#88bb00', drop:22},
+  rocket: {n:'ROCKET',   ico:'🚀', dmg:75, rng:548,spd:.44, am:3, type:'explosive',r:'leg', p:0,   col:'#ff4400', drop:15,ct:1},
+  zapper: {n:'ZAPPER',   ico:'⚡', dmg:18, rng:358,spd:1.8, am:25,type:'gun',   r:'leg',   p:0,   col:'#ffff00', drop:15,auto:1,ct:1},
 };
 const EFX={
   none:     {n:'NONE',      ico:'✕',r:'common',p:0},
@@ -966,8 +966,8 @@ const G={
   },
 
   scheduleDrops(){
-    // Drop weapons from sky every 12-20 seconds
-    this._dropTO=setTimeout(()=>this._spawnDrop(),8000+Math.random()*8000);
+    // First drop arrives fast — 3 to 6 seconds
+    this._dropTO=setTimeout(()=>this._spawnDrop(),3000+Math.random()*3000);
   },
   _spawnDrop(){
     if(!this.active)return;
@@ -977,22 +977,22 @@ const G={
     for(const k of wkeys){r-=WP[k].drop;if(r<=0){wid=k;break;}}
     const x=80+Math.random()*(CV.width-160);
     this.drops.push({x,y:-40,wid,vy:3,bounce:0,t:0,landed:false,timer:600,pulse:0,w:44,h:44});
-    setTimeout(()=>this._spawnDrop(),12000+Math.random()*10000);
+    // Next drop every 5-10 seconds — much more frequent
+    setTimeout(()=>this._spawnDrop(),5000+Math.random()*5000);
   },
 
   scheduleHeals(){
-    // Rare heals every 25-45 seconds
-    this._healTO=setTimeout(()=>this._spawnHeal(),20000+Math.random()*15000);
+    // First heal in 12-18 seconds
+    this._healTO=setTimeout(()=>this._spawnHeal(),12000+Math.random()*6000);
   },
   _spawnHeal(){
     if(!this.active)return;
-    // Only if total players have been damaged
     const x=100+Math.random()*(CV.width-200);
-    // Land on nearest platform floor
     let bestY=CV.height-56;
     this.platforms.forEach(pl=>{if(pl.h<30&&x>pl.x&&x<pl.x+pl.w)bestY=pl.y-20;});
     this.healPacks.push({x,y:bestY,t:0,gone:false,timer:900,pulse:0});
-    setTimeout(()=>this._spawnHeal(),25000+Math.random()*20000);
+    // Next heal every 18-30 seconds
+    setTimeout(()=>this._spawnHeal(),18000+Math.random()*12000);
   },
 
   spawnWave(){
