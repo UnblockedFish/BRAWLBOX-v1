@@ -274,6 +274,32 @@ canvas{position:fixed;inset:0;display:block}
 @keyframes dropAnim{0%{transform:translateY(-60px) rotate(0deg);opacity:0}60%{opacity:1}100%{transform:translateY(0) rotate(0deg);opacity:1}}
 @keyframes pickupPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.08);opacity:.8}}
 @keyframes vanish{0%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(1.5)}}
+
+/* ── CONTROLS OVERLAY ── */
+#ctrlOverlay{
+  position:fixed;inset:0;z-index:900;pointer-events:none;
+  display:none;align-items:center;justify-content:center;
+  background:rgba(3,2,10,.82);
+}
+#ctrlOverlay.show{display:flex;animation:coFade .4s ease both}
+@keyframes coFade{from{opacity:0}to{opacity:1}}
+.co-box{
+  background:var(--dk);border:1px solid var(--dim);
+  clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));
+  padding:32px 40px;max-width:700px;width:90%;
+  animation:coSlide .5s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes coSlide{from{transform:scale(.85) translateY(30px);opacity:0}to{transform:none;opacity:1}}
+.co-title{font-family:var(--fh);font-size:clamp(28px,5vw,52px);letter-spacing:10px;color:var(--w);text-align:center;margin-bottom:4px}
+.co-subtitle{font-size:10px;color:var(--dim);letter-spacing:5px;text-align:center;margin-bottom:24px}
+.co-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px}
+.co-col-title{font-family:var(--fh);font-size:14px;letter-spacing:5px;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--dim)}
+.co-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.co-key{font-family:var(--fh);font-size:11px;letter-spacing:2px;padding:4px 8px;border:1px solid var(--dim);background:rgba(255,255,255,.05);color:var(--y);min-width:48px;text-align:center;white-space:nowrap}
+.co-desc{font-size:10px;color:#666;letter-spacing:2px}
+.co-bar{height:4px;background:linear-gradient(90deg,var(--r),var(--c));margin-bottom:24px;border-radius:0}
+.co-countdown{font-family:var(--fh);font-size:48px;color:var(--y);text-shadow:0 0 20px var(--y);text-align:center;line-height:1;margin-bottom:4px}
+.co-skip{font-size:9px;color:var(--dim);letter-spacing:4px;text-align:center}
 </style>
 </head>
 <body>
@@ -507,6 +533,19 @@ canvas{position:fixed;inset:0;display:block}
     <button class="btn p" onclick="go('sGallery')">🎨 GALLERY</button>
   </div>
   <div style="height:16px"></div>
+</div>
+
+<div id="ctrlOverlay">
+  <div class="co-box">
+    <div class="co-title">CONTROLS</div>
+    <div class="co-subtitle" id="coModeLabel">DUEL · WAREHOUSE</div>
+    <div class="co-bar"></div>
+    <div class="co-grid" id="coGrid">
+      <!-- filled by JS -->
+    </div>
+    <div class="co-countdown" id="coCount">5</div>
+    <div class="co-skip">PRESS ANY KEY OR WAIT</div>
+  </div>
 </div>
 
 <script>
@@ -956,6 +995,80 @@ const G={
 
     this.active=true; // now start
     this.loop();
+    // Show controls overlay
+    this.showControlsOverlay(mode);
+  },
+
+  showControlsOverlay(mode){
+    const overlay=document.getElementById('ctrlOverlay');
+    const grid=document.getElementById('coGrid');
+    const lbl=document.getElementById('coModeLabel');
+    const count=document.getElementById('coCount');
+    if(!overlay)return;
+
+    const mapName=(MAPS[this.currentMap]||{name:'?'}).name;
+    lbl.textContent=mode.toUpperCase()+' · '+mapName;
+
+    const is2p=mode==='2p';
+    const p1col='color:var(--r)';
+    const p2col='color:var(--c)';
+
+    const mk=(keys,desc)=>`<div class="co-row"><div class="co-key">${keys}</div><div class="co-desc">${desc}</div></div>`;
+
+    grid.innerHTML=`
+      <div>
+        <div class="co-col-title" style="${p1col}">PLAYER 1${is2p?' · WASD':''}</div>
+        ${mk('A / D','MOVE LEFT / RIGHT')}
+        ${mk('W / SPACE','JUMP')}
+        ${mk('F','ATTACK')}
+        ${mk('Q','SPECIAL BLAST')}
+        ${mk('SHIFT','DASH')}
+        ${mk('E','PICK UP / HEAL')}
+        ${mk('R','SWAP WEAPON')}
+        ${mk('ESC','QUIT TO MENU')}
+      </div>
+      <div>
+        ${is2p?`
+        <div class="co-col-title" style="${p2col}">PLAYER 2 · ARROWS</div>
+        ${mk('← →','MOVE LEFT / RIGHT')}
+        ${mk('↑','JUMP')}
+        ${mk('L','ATTACK')}
+        ${mk('. (DOT)','SPECIAL BLAST')}
+        ${mk('SHIFT →','DASH')}
+        ${mk(', (COMMA)','PICK UP / HEAL')}
+        ${mk('/ (SLASH)','SWAP WEAPON')}
+        `:`
+        <div class="co-col-title" style="color:var(--y)">TIPS</div>
+        ${mk('DASH + ATK','LUNGE STRIKE')}
+        ${mk('E','GRAB FALLING WEAPONS')}
+        ${mk('ENERGY ★','FILLS OVER TIME')}
+        ${mk('Q @ 80★','UNLEASH SPECIAL')}
+        ${mk('💊 GREEN','HEALS 250 HP')}
+        ${mk('📦 DROPS','RAIN FROM SKY')}
+        ${mk('HIGH RARITY','GLOW BORDER')}
+        `}
+      </div>`;
+
+    overlay.classList.add('show');
+    let n=5;
+    count.textContent=n;
+    const interval=setInterval(()=>{
+      n--;
+      count.textContent=n;
+      if(n<=0){clearInterval(interval);overlay.classList.remove('show');}
+    },1000);
+
+    // Any key dismisses
+    const dismiss=(e)=>{
+      if(e.code==='Escape')return; // ESC already stops game
+      clearInterval(interval);
+      overlay.classList.remove('show');
+      document.removeEventListener('keydown',dismiss);
+    };
+    document.addEventListener('keydown',dismiss,{once:true});
+    overlay.onclick=()=>{clearInterval(interval);overlay.classList.remove('show');};
+    // Store interval so stop() can clear it
+    this._ctrlOverlayInterval=interval;
   },
 
   rematch(){this.start(this.mode,this.currentMap);},
@@ -966,24 +1079,28 @@ const G={
   },
 
   scheduleDrops(){
-    // First drop arrives fast — 3 to 6 seconds
-    this._dropTO=setTimeout(()=>this._spawnDrop(),3000+Math.random()*3000);
+    // First drop immediately at 1-2 seconds
+    this._dropTO=setTimeout(()=>this._spawnDrop(),1000+Math.random()*1000);
   },
   _spawnDrop(){
     if(!this.active)return;
     const wkeys=Object.keys(WP).filter(w=>w!=='fists'&&WP[w].drop>0);
     const total=wkeys.reduce((a,k)=>a+WP[k].drop,0);
-    let r=Math.random()*total; let wid='pistol';
-    for(const k of wkeys){r-=WP[k].drop;if(r<=0){wid=k;break;}}
-    const x=80+Math.random()*(CV.width-160);
-    this.drops.push({x,y:-40,wid,vy:3,bounce:0,t:0,landed:false,timer:600,pulse:0,w:44,h:44});
-    // Next drop every 5-10 seconds — much more frequent
-    setTimeout(()=>this._spawnDrop(),5000+Math.random()*5000);
+    // Spawn 2-3 drops at once for chaos
+    const count=Math.floor(2+Math.random()*2);
+    for(let i=0;i<count;i++){
+      let r=Math.random()*total; let wid='pistol';
+      for(const k of wkeys){r-=WP[k].drop;if(r<=0){wid=k;break;}}
+      const x=80+Math.random()*(CV.width-160);
+      this.drops.push({x,y:-40-(i*80),wid,vy:3,bounce:0,t:0,landed:false,timer:700,pulse:0,w:44,h:44});
+    }
+    // Next batch every 3-5 seconds — CONSTANT RAIN
+    setTimeout(()=>this._spawnDrop(),3000+Math.random()*2000);
   },
 
   scheduleHeals(){
-    // First heal in 12-18 seconds
-    this._healTO=setTimeout(()=>this._spawnHeal(),12000+Math.random()*6000);
+    // First heal in 8-12 seconds
+    this._healTO=setTimeout(()=>this._spawnHeal(),8000+Math.random()*4000);
   },
   _spawnHeal(){
     if(!this.active)return;
@@ -991,8 +1108,8 @@ const G={
     let bestY=CV.height-56;
     this.platforms.forEach(pl=>{if(pl.h<30&&x>pl.x&&x<pl.x+pl.w)bestY=pl.y-20;});
     this.healPacks.push({x,y:bestY,t:0,gone:false,timer:900,pulse:0});
-    // Next heal every 18-30 seconds
-    setTimeout(()=>this._spawnHeal(),18000+Math.random()*12000);
+    // Next heal every 12-20 seconds
+    setTimeout(()=>this._spawnHeal(),12000+Math.random()*8000);
   },
 
   spawnWave(){
@@ -1017,6 +1134,9 @@ const G={
     this.active=false;
     if(this._raf){cancelAnimationFrame(this._raf);this._raf=null;}
     clearTimeout(this._dropTO); clearTimeout(this._healTO);
+    clearInterval(this._ctrlOverlayInterval);
+    const overlay=document.getElementById('ctrlOverlay');
+    if(overlay)overlay.classList.remove('show');
     document.getElementById('hud').style.display='none';
     this.showResults(win);
   },
@@ -1092,45 +1212,192 @@ const G={
   ctrlCPU(p){
     if(p.stun>0)return;
     const ai=p.ai||{skill:.7};
+    const T=this.tick;
+
+    // ── TARGET SELECTION ──────────────────────────────────────
     const tgts=this.players.filter(e=>e!==p&&!e.dead&&(this.mode!=='squad'||e.team!==p.team));
     if(!tgts.length)return;
-    tgts.sort((a,b)=>d2(p,a)-d2(p,b));
+    // Pick lowest-HP target within range, otherwise closest
+    tgts.sort((a,b)=>{
+      const da=d2(p,a), db=d2(p,b);
+      if(da<200*200&&db<200*200) return a.hp-b.hp; // nearby: focus weak
+      return da-db;
+    });
     const t=tgts[0];
     const dx=t.cx-p.cx, dy=t.cy-p.cy, dist=Math.sqrt(dx*dx+dy*dy);
-    const rng=p.wep?.rng||68;
-    const atkRng=p.wep?.type==='melee'?rng*1.1:rng*.85;
+    const w=p.wep||WP.fists;
+    const rng=w.rng||68;
+    const isMelee=w.type==='melee';
+    const isGun=w.type==='gun'||w.type==='explosive';
+    const skill=ai.skill;
 
-    // Smarter AI: maintain preferred range, strafe, retreat when low HP
-    const prefDist=p.wep?.type==='gun'?rng*.6:rng*.7;
-    if(p.hp<p.maxHp*.25){
-      // Retreat
-      p.vx-=(dx/dist)*1.2*ai.skill;
-      p.face=dx>0?-1:1;
-    } else if(dist>prefDist+80){
-      // Approach
-      p.vx+=(dx/dist)*1.1*ai.skill;
-      p.face=dx>0?1:-1;
-    } else if(dist<prefDist-40&&p.wep?.type==='gun'){
-      // Back off for guns
-      p.vx-=(dx/dist)*.8*ai.skill;
+    // ── INITIATIVE STATE MACHINE ──────────────────────────────
+    // States: hunt, strafe, retreat, dodge, rushdown
+    if(!p._aiState) p._aiState='hunt';
+    if(!p._aiTimer) p._aiTimer=0;
+    p._aiTimer--;
+
+    // State transitions
+    const hpRatio=p.hp/p.maxHp;
+    const tHpRatio=t.hp/t.maxHp;
+    if(hpRatio<0.2) p._aiState='retreat';
+    else if(hpRatio<0.4&&Math.random()<.01) p._aiState='retreat';
+    else if(dist<80&&isMelee&&p._aiState!=='retreat') p._aiState='rushdown';
+    else if(dist<180&&isGun&&Math.random()<.008*skill) p._aiState='strafe';
+    else if(p._aiTimer<=0){
+      // Random state switch for unpredictability
+      const r=Math.random();
+      if(r<.5) p._aiState='hunt';
+      else if(r<.7&&isGun) p._aiState='strafe';
+      else if(r<.85&&dist<300) p._aiState='rushdown';
+      else p._aiState='hunt';
+      p._aiTimer=Math.floor(30+Math.random()*60/skill);
     }
 
-    // Jump to reach targets on higher platforms
-    if(p.grnd&&dy<-80&&Math.random()<.04*ai.skill) p.vy=-15;
-    // Periodic random strafe — use this.tick not T (T is scoped to update())
-    if(this.tick%90===0&&Math.random()<.4) p.vx+=(Math.random()-.5)*4;
+    // ── MOVEMENT BY STATE ─────────────────────────────────────
+    const spd=1.3*skill;
+    switch(p._aiState){
+      case 'hunt':
+        // Move to ideal engagement range
+        if(isMelee){
+          if(dist>rng*.8){p.vx+=(dx/dist)*spd*1.2;p.face=dx>0?1:-1;}
+          else if(dist<rng*.4){p.vx-=(dx/dist)*spd*.5;} // too close, back up
+        } else {
+          const ideal=rng*.55;
+          if(dist>ideal+60){p.vx+=(dx/dist)*spd;p.face=dx>0?1:-1;}
+          else if(dist<ideal-60){p.vx-=(dx/dist)*spd*.8;}
+          else {p.face=dx>0?1:-1;} // hold position, just face target
+        }
+        break;
+      case 'strafe':
+        // Circle-strafe: move perpendicular to target
+        if(!p._strafeDir||T%120===0) p._strafeDir=Math.random()<.5?1:-1;
+        const perp={x:-dy/dist,y:dx/dist};
+        p.vx+=perp.x*spd*p._strafeDir*1.1;
+        p.face=dx>0?1:-1;
+        // Close in slightly if too far
+        if(dist>rng*.9){p.vx+=(dx/dist)*spd*.4;}
+        break;
+      case 'retreat':
+        // Run away, hop to higher ground
+        p.vx-=(dx/dist)*spd*1.4;
+        p.face=dx>0?-1:1;
+        if(p.grnd&&Math.random()<.08*skill)p.vy=-17;
+        break;
+      case 'rushdown':
+        // Charge directly at enemy
+        p.vx+=(dx/dist)*spd*1.6;
+        p.face=dx>0?1:-1;
+        // Dash when close enough
+        if(dist<180&&(p.dashCd||0)<=0&&Math.random()<.06*skill){
+          p.vx+=p.face*19;p.inv=14;p.dashCd=34;
+          this.burst(p.cx,p.cy,p.oc,5);
+        }
+        break;
+    }
+    if(p.dashCd>0)p.dashCd--;
 
-    // Pick up weapons from drops
-    if(Math.random()<.02*ai.skill){
-      this.drops.forEach(d=>{if(d.landed&&Math.abs(p.cx-(d.x+d.w/2))<70&&Math.abs(p.cy-(d.y+d.h/2))<70){p.setWep(d.wid);d.timer=0;this.kfeed(p.name,'grabbed',WP[d.wid].ico);}});
+    // ── JUMPING ───────────────────────────────────────────────
+    if(p.grnd){
+      // Jump to reach target on higher platform
+      if(dy<-60&&Math.random()<.06*skill) p.vy=-17;
+      // Jump over projectiles / obstacles
+      if(Math.random()<.015*skill&&p._aiState!=='retreat') p.vy=-15;
+      // Jump while rushing
+      if(p._aiState==='rushdown'&&Math.random()<.04) p.vy=-16;
     }
-    // Use heal packs if low
-    if(p.hp<p.maxHp*.4){
-      this.healPacks.forEach(hp=>{if(!hp.gone&&Math.abs(p.cx-hp.x)<60&&Math.abs(p.cy-hp.y)<60&&Math.random()<.1){this.doHeal(p,hp);}});
+
+    // ── DODGE PROJECTILES ─────────────────────────────────────
+    // Check for incoming bullets and dodge
+    if(Math.random()<.12*skill){
+      const threats=this.bullets.filter(b=>b.own!==p&&b.team!==p.team);
+      for(const b of threats){
+        const bDx=p.cx-b.x, bDy=p.cy-b.y;
+        const bDist=Math.sqrt(bDx*bDx+bDy*bDy);
+        if(bDist<180&&bDist>10){
+          // If bullet heading toward us, dodge perpendicular
+          const dot=(b.vx*(-bDx)+b.vy*(-bDy))/bDist;
+          if(dot>4){
+            p.vx+=(bDy/bDist)*p.face*6*skill; // strafe away
+            if(p.grnd&&Math.random()<.3*skill){p.vy=-15;} // jump
+            break;
+          }
+        }
+      }
     }
-    // Attack
-    if(dist<atkRng*1.1&&p.atkCd<=0&&Math.random()<ai.skill){this.attack(p);p.atkCd=p.atkCdMax;}
-    if(p.wep?.auto&&dist<atkRng*1.4&&p.atkCd<=0&&Math.random()<ai.skill){this.attack(p);p.atkCd=p.atkCdMax;}
+
+    // ── SPECIAL MOVE ──────────────────────────────────────────
+    if(p.energy>=80&&p.spCd<=0&&dist<250&&Math.random()<.02*skill){
+      this.special(99);
+      // Simulate special for CPUs
+      p.energy=0;p.spCd=220;p.inv=28;p.vx=p.face*24;p.vy=-11;
+      this.explosions.push({x:p.cx,y:p.cy,r:10,maxR:220,life:22,maxL:22,col:'#c800ff'});
+      this.burst(p.cx,p.cy,'#c800ff',15);
+      this.players.forEach(tt=>{
+        if(tt===p||tt.dead||(this.mode==='squad'&&tt.team===p.team))return;
+        const dd=Math.sqrt((tt.cx-p.cx)**2+(tt.cy-p.cy)**2);
+        if(dd<220){tt.hit(40,p);tt.vx=(tt.cx>p.cx?1:-1)*14;tt.vy=-10;dmgNum(tt.cx,tt.cy,40,'#c800ff');}
+      });
+    }
+
+    // ── WEAPON PICKUPS ────────────────────────────────────────
+    // Aggressively hunt for better weapons
+    if(Math.random()<.05*skill){
+      let bestDrop=null, bestScore=-1;
+      this.drops.forEach(d=>{
+        if(!d.landed)return;
+        const dd=Math.sqrt((p.cx-(d.x+d.w/2))**2+(p.cy-(d.y+d.h/2))**2);
+        if(dd<120){
+          // Score by weapon power
+          const wd=WP[d.wid];
+          const score=(wd.dmg||0)+(wd.rng||0)*.05-dd*.1;
+          if(score>bestScore){bestScore=score;bestDrop=d;}
+        }
+      });
+      if(bestDrop){
+        const dd=Math.sqrt((p.cx-(bestDrop.x+bestDrop.w/2))**2+(p.cy-(bestDrop.y+bestDrop.h/2))**2);
+        if(dd<55){p.setWep(bestDrop.wid);bestDrop.timer=0;this.kfeed(p.name,'grabbed',WP[bestDrop.wid].ico);}
+        else{
+          // Move toward the drop
+          const ddx=(bestDrop.x+bestDrop.w/2)-p.cx, ddy=(bestDrop.y+bestDrop.h/2)-p.cy;
+          const ddist=Math.sqrt(ddx*ddx+ddy*ddy);
+          p.vx+=(ddx/ddist)*spd*.8; p.face=ddx>0?1:-1;
+        }
+      }
+    }
+
+    // ── HEAL SEEKING ──────────────────────────────────────────
+    if(hpRatio<0.5&&Math.random()<.06*skill){
+      let bestHeal=null, bestHealDist=Infinity;
+      this.healPacks.forEach(hp=>{
+        if(hp.gone)return;
+        const hd=Math.sqrt((p.cx-hp.x)**2+(p.cy-hp.y)**2);
+        if(hd<bestHealDist){bestHealDist=hd;bestHeal=hp;}
+      });
+      if(bestHeal){
+        if(bestHealDist<50){this.doHeal(p,bestHeal);}
+        else if(bestHealDist<200){
+          const hdx=bestHeal.x-p.cx, hdy=bestHeal.y-p.cy;
+          const hd=Math.sqrt(hdx*hdx+hdy*hdy);
+          p.vx+=(hdx/hd)*spd; p.face=hdx>0?1:-1;
+        }
+      }
+    }
+
+    // ── ATTACK ────────────────────────────────────────────────
+    // Gun: lead target based on distance and bullet speed
+    const atkRng=isMelee?rng*1.15:rng*.9;
+    if(dist<atkRng&&p.atkCd<=0){
+      // Higher skill = near-perfect attack timing
+      const hitChance=isMelee?skill:Math.min(skill+(1-dist/rng)*.3,1);
+      if(Math.random()<hitChance){
+        this.attack(p);p.atkCd=p.atkCdMax;
+      }
+    }
+    // Auto-fire weapons: spray continuously in range
+    if(w.auto&&dist<rng*1.3&&p.atkCd<=0&&Math.random()<skill*.9){
+      this.attack(p);p.atkCd=p.atkCdMax;
+    }
   },
 
   physics(p){
