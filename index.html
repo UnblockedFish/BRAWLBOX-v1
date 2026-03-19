@@ -1485,110 +1485,243 @@ function drawEnt(p){
 
 // ═══════════════════════════════════════════════════════════════
 //  ONLINE — Real PeerJS P2P
+//  KEY FIXES:
+//  1. Peer IDs must be lowercase alphanumeric only (no underscores)
+//  2. Destroy old peer fully before creating new one
+//  3. Explicit ICE server list for reliable NAT traversal
+//  4. Proper unavailable-id retry with new code each time
+//  5. Connection metadata passed as plain string, not object
 // ═══════════════════════════════════════════════════════════════
 const NET={
   peer:null, conn:null, isHost:false,
   myName:'', oppName:'',
   roomCode:'', latency:0, connected:false,
-  _pingTO:null, _pingStart:0, _pollTO:null,
+  _pingTO:null, _pingStart:0,
+  _busy:false, // prevents double-clicks
 
   _st(side,msg,col){
-    const el=document.getElementById(side+'St'); if(el){el.textContent=msg;el.style.color=col||'var(--dim)';}
+    const el=document.getElementById(side+'St');
+    if(el){el.textContent=msg;el.style.color=col||'var(--dim)';}
   },
-  _checkPeer(){
-    if(!window.Peer){this._st('host','⚠ PEERJS NOT LOADED. CHECK YOUR INTERNET.','var(--r)');return false;}
-    return true;
+
+  // Generate a 6-char lowercase alphanumeric code — NO special chars
+  _makeCode(){
+    const chars='abcdefghijkmnpqrstuvwxyz23456789'; // no ambiguous chars
+    let s='';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];
+    return s;
   },
-  _makePeer(id){
-    if(this.peer){try{this.peer.destroy();}catch(e){}}
-    const cfg={debug:0,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]}};
-    this.peer=id?new Peer(id,cfg):new Peer(cfg);
-    return this.peer;
+
+  // Peer config — multiple STUN servers for best chance of NAT traversal
+  _peerCfg(){
+    return {
+      debug:1,
+      config:{
+        iceServers:[
+          {urls:'stun:stun.l.google.com:19302'},
+          {urls:'stun:stun1.l.google.com:19302'},
+          {urls:'stun:stun2.l.google.com:19302'},
+          {urls:'stun:stun3.l.google.com:19302'},
+          {urls:'stun:stun4.l.google.com:19302'},
+          {urls:'stun:global.stun.twilio.com:3478'},
+        ]
+      }
+    };
+  },
+
+  // Safely destroy existing peer, wait a tick, then call cb
+  _destroyThen(cb){
+    if(this.peer){
+      try{
+        this.peer.off('open'); this.peer.off('connection');
+        this.peer.off('error'); this.peer.off('disconnected');
+        this.peer.destroy();
+      }catch(e){}
+      this.peer=null;
+    }
+    setTimeout(cb,150); // small delay so sockets fully close
   },
 
   host(){
-    if(!this._checkPeer())return;
-    this.myName=(document.getElementById('hostNameInp').value||'HOST').trim().toUpperCase().slice(0,12)||'HOST';
+    if(this._busy)return;
+    if(!window.Peer){this._st('host','⚠ PEERJS NOT LOADED — CHECK INTERNET','var(--r)');return;}
+    this._busy=true;
+    this.myName=(document.getElementById('hostNameInp').value||'').trim().toUpperCase().slice(0,12)||'HOST';
     this.isHost=true;
-    this.roomCode=Math.random().toString(36).substring(2,8).toUpperCase();
-    const peerId='BB5_'+this.roomCode;
-    this._st('host','⏳ CONNECTING TO SIGNALING SERVER...','var(--c)');
+    this.connected=false;
+
     document.getElementById('hostBtn').style.display='none';
     document.getElementById('hostCancelBtn').style.display='block';
+    document.getElementById('codeDisplay').style.display='none';
+    this._st('host','⏳ CONNECTING TO SIGNALING SERVER...','var(--c)');
 
-    const peer=this._makePeer(peerId);
-    peer.on('open',()=>{
-      document.getElementById('codeDisplay').textContent=this.roomCode;
-      document.getElementById('codeDisplay').style.display='block';
-      this._st('host','✅ CODE READY — WAITING FOR FRIEND...','var(--g)');
+    this._destroyThen(()=>this._doHost());
+  },
+
+  _doHost(attempt){
+    attempt=attempt||0;
+    // Generate a fresh code each attempt
+    this.roomCode=this._makeCode();
+    // PeerJS ID must be globally unique lowercase alphanumeric + hyphens only
+    const peerId='brawlbox'+this.roomCode;
+
+    const peer=new Peer(peerId, this._peerCfg());
+    this.peer=peer;
+
+    peer.on('open',id=>{
+      this._busy=false;
+      // Display the human-readable code (uppercase for readability)
+      const display=this.roomCode.toUpperCase();
+      const cd=document.getElementById('codeDisplay');
+      cd.textContent=display; cd.style.display='block';
+      this._st('host','✅ CODE READY — SHARE IT — WAITING...','var(--g)');
     });
+
     peer.on('connection',conn=>{
-      this.conn=conn; this.oppName=(conn.metadata?.name||'GUEST').toUpperCase();
+      // Extract opponent name from label (we pass it as the connection label)
+      this.conn=conn;
+      this.oppName=(conn.label||'GUEST').slice(0,12).toUpperCase();
+
       conn.on('open',()=>{
         this.connected=true;
-        this._st('host','✅ '+this.oppName+' CONNECTED! STARTING...','var(--g)');
-        conn.send({type:'START',map:votedMap||'warehouse',hostName:this.myName});
+        this._st('host','✅ '+this.oppName+' JOINED! STARTING...','var(--g)');
+        // Send START with map choice and host name
+        conn.send(JSON.stringify({type:'START',map:votedMap||'warehouse',hostName:this.myName}));
         this._startPing();
-        setTimeout(()=>this._launch(),1400);
+        setTimeout(()=>this._launch(),1600);
       });
       conn.on('data',d=>this._onData(d));
       conn.on('close',()=>this._disconnect());
-      conn.on('error',e=>this._st('host','⚠ CONN ERROR: '+e.type,'var(--r)'));
+      conn.on('error',e=>console.warn('conn err',e));
     });
+
     peer.on('error',e=>{
-      if(e.type==='unavailable-id'){this.roomCode=Math.random().toString(36).substring(2,8).toUpperCase();this.host();return;}
-      this._st('host','⚠ '+e.type.toUpperCase(),'var(--r)');
+      this._busy=false;
+      if(e.type==='unavailable-id'&&attempt<5){
+        // Code taken — retry with a different code
+        this._st('host','⚡ CODE TAKEN, GENERATING NEW ONE...','var(--y)');
+        peer.destroy(); this.peer=null;
+        setTimeout(()=>this._doHost(attempt+1),200);
+        return;
+      }
+      if(e.type==='network'||e.type==='server-error'||e.type==='socket-error'){
+        this._st('host','⚠ SIGNALING SERVER UNREACHABLE. TRY AGAIN.','var(--r)');
+      } else {
+        this._st('host','⚠ ERROR: '+e.type.toUpperCase(),'var(--r)');
+      }
+      document.getElementById('hostBtn').style.display='block';
+      document.getElementById('hostCancelBtn').style.display='none';
     });
-    peer.on('disconnected',()=>this._st('host','RECONNECTING...','var(--y)'));
+
+    peer.on('disconnected',()=>{
+      if(!this.connected) this._st('host','⚠ DISCONNECTED FROM SERVER','var(--r)');
+    });
   },
 
   join(){
-    if(!this._checkPeer())return;
-    this.myName=(document.getElementById('joinNameInp').value||'GUEST').trim().toUpperCase().slice(0,12)||'GUEST';
-    const code=(document.getElementById('joinCodeInp').value||'').toUpperCase().trim();
-    if(!code||code.length<4){this._st('join','⚠ ENTER THE CODE YOUR FRIEND GAVE YOU','var(--r)');return;}
-    this.isHost=false; this.roomCode=code;
-    const peerId='BB5_'+code;
-    this._st('join','⏳ CONNECTING...','var(--c)');
+    if(this._busy)return;
+    if(!window.Peer){this._st('join','⚠ PEERJS NOT LOADED — CHECK INTERNET','var(--r)');return;}
+
+    this.myName=(document.getElementById('joinNameInp').value||'').trim().toUpperCase().slice(0,12)||'GUEST';
+    const rawCode=(document.getElementById('joinCodeInp').value||'').trim().toLowerCase().replace(/[^a-z0-9]/g,'');
+    if(!rawCode||rawCode.length<4){this._st('join','⚠ ENTER THE 6-CHAR CODE FROM YOUR FRIEND','var(--r)');return;}
+
+    this._busy=true;
+    this.isHost=false;
+    this.connected=false;
+    this.roomCode=rawCode;
+
     document.getElementById('joinBtn').style.display='none';
     document.getElementById('joinCancelBtn').style.display='block';
+    this._st('join','⏳ CONNECTING...','var(--c)');
 
-    const peer=this._makePeer(null);
-    peer.on('open',()=>{
-      this._st('join','🔗 DIALING HOST...','var(--c)');
-      const conn=peer.connect(peerId,{reliable:true,metadata:{name:this.myName}});
-      this.conn=conn;
-      conn.on('open',()=>{this.connected=true;this._st('join','✅ CONNECTED! WAITING FOR HOST...','var(--g)');});
-      conn.on('data',d=>this._onData(d));
-      conn.on('close',()=>this._disconnect());
-      conn.on('error',e=>this._st('join','⚠ CONN ERROR: '+e.type,'var(--r)'));
-    });
-    peer.on('error',e=>{
-      const msg=e.type==='peer-unavailable'?'⚠ CODE "'+code+'" NOT FOUND — CHECK CODE':'⚠ '+e.type.toUpperCase();
-      this._st('join',msg,'var(--r)');
-      document.getElementById('joinBtn').style.display='block';
-      document.getElementById('joinCancelBtn').style.display='none';
+    this._destroyThen(()=>{
+      const peer=new Peer(this._peerCfg()); // anonymous peer
+      this.peer=peer;
+      const targetId='brawlbox'+rawCode;
+
+      peer.on('open',myId=>{
+        this._st('join','🔗 REACHING HOST...','var(--c)');
+        // Pass our name as the connection label — avoids metadata serialization issues
+        const conn=peer.connect(targetId,{
+          reliable:true,
+          label:this.myName,       // plain string — always works
+          serialization:'json',    // explicit JSON serialization
+        });
+        this.conn=conn;
+
+        // Timeout if no connection in 12 seconds
+        const timeout=setTimeout(()=>{
+          if(!this.connected){
+            this._st('join','⚠ TIMED OUT — IS THE CODE CORRECT?','var(--r)');
+            this._resetJoinUI();
+          }
+        },12000);
+
+        conn.on('open',()=>{
+          clearTimeout(timeout);
+          this.connected=true;
+          this._busy=false;
+          this._st('join','✅ CONNECTED! WAITING FOR HOST TO START...','var(--g)');
+        });
+        conn.on('data',d=>this._onData(d));
+        conn.on('close',()=>{clearTimeout(timeout);this._disconnect();});
+        conn.on('error',e=>{
+          clearTimeout(timeout);
+          this._st('join','⚠ CONNECTION ERROR: '+e.type,'var(--r)');
+          this._resetJoinUI();
+        });
+      });
+
+      peer.on('error',e=>{
+        this._busy=false;
+        const msg=e.type==='peer-unavailable'
+          ?'⚠ CODE "'+rawCode.toUpperCase()+'" NOT FOUND. IS HOST WAITING?'
+          :'⚠ '+e.type.toUpperCase()+' — CHECK YOUR CONNECTION';
+        this._st('join',msg,'var(--r)');
+        this._resetJoinUI();
+      });
     });
   },
 
-  _onData(d){
+  _resetJoinUI(){
+    this._busy=false;
+    document.getElementById('joinBtn').style.display='block';
+    document.getElementById('joinCancelBtn').style.display='none';
+  },
+
+  _onData(raw){
+    // Handle both pre-parsed objects and JSON strings
+    let d;
+    if(typeof raw==='string'){try{d=JSON.parse(raw);}catch(e){return;}}
+    else d=raw;
     if(!d||!d.type)return;
+
     if(d.type==='START'){
-      this.oppName=(d.hostName||'HOST').toUpperCase();
+      this.oppName=(d.hostName||'HOST').slice(0,12).toUpperCase();
       votedMap=d.map||'warehouse';
+      this._busy=false;
       this._st('join','🎮 STARTING!','var(--g)');
       this._startPing();
-      setTimeout(()=>this._launch(),800);
+      setTimeout(()=>this._launch(),900);
     }
     if(d.type==='INPUT'&&OG.active) OG.applyInput(d);
     if(d.type==='STATE'&&OG.active) OG.applyState(d);
     if(d.type==='PING') this.send({type:'PONG',id:d.id});
-    if(d.type==='PONG'){this.latency=Date.now()-this._pingStart;const pe=document.getElementById('netPing');if(pe)pe.textContent='PING '+this.latency+'ms';}
-    if(d.type==='REMATCH'&&OG.active){G.ann('REMATCH REQUESTED');OG.start();}
+    if(d.type==='PONG'){
+      this.latency=Date.now()-this._pingStart;
+      const pe=document.getElementById('netPing');
+      if(pe)pe.textContent='PING '+this.latency+'ms';
+    }
+    if(d.type==='REMATCH'){G.ann('REMATCH INCOMING!');setTimeout(()=>{OG._ended=false;OG.start();},1000);}
     if(d.type==='QUIT') this._disconnect();
   },
 
-  send(msg){if(this.conn?.open){try{this.conn.send(msg);}catch(e){}}},
+  // Always send as JSON string for maximum compatibility
+  send(msg){
+    if(this.conn&&this.conn.open){
+      try{this.conn.send(JSON.stringify(msg));}catch(e){console.warn('send fail',e);}
+    }
+  },
 
   _startPing(){
     clearInterval(this._pingTO);
@@ -1615,18 +1748,18 @@ const NET={
   },
 
   cancel(){
+    this._busy=false;
     clearInterval(this._pingTO);
     this.connected=false;
-    if(this.conn){try{this.conn.close();}catch(e){}}
-    if(this.peer){try{this.peer.destroy();}catch(e){}}
-    this.conn=null; this.peer=null;
+    if(this.conn){try{this.conn.close();}catch(e){} this.conn=null;}
+    if(this.peer){try{this.peer.destroy();}catch(e){} this.peer=null;}
     document.getElementById('hostBtn').style.display='block';
     document.getElementById('hostCancelBtn').style.display='none';
     document.getElementById('joinBtn').style.display='block';
     document.getElementById('joinCancelBtn').style.display='none';
     document.getElementById('codeDisplay').style.display='none';
-    this._st('host','');this._st('join','');
-    document.getElementById('netPing').textContent='';
+    this._st('host',''); this._st('join','');
+    const pe=document.getElementById('netPing'); if(pe)pe.textContent='';
   },
 };
 
