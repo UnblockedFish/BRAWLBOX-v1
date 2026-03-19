@@ -431,30 +431,45 @@ canvas{display:block;position:fixed;inset:0}
 <!-- ═══ ONLINE ══════════════════════════════ -->
 <div class="scr" id="sOnline">
   <div class="ol-title">ONLINE MODE</div>
-  <div class="ol-sub">REAL-TIME PLAY WITH FRIENDS</div>
+  <div class="ol-sub">REAL P2P · POWERED BY PEERJS · WORKS ACROSS DIFFERENT COMPUTERS</div>
   <div class="ol-cards">
+
+    <!-- HOST -->
     <div class="ol-card panel">
       <div style="font-size:36px">🏠</div>
       <div class="ol-card-title" style="color:var(--g)">HOST GAME</div>
-      <div class="ol-card-desc">Create a room. Share the code with a friend and wait for them to join.</div>
-      <button class="btn g sm fill" onclick="onlineHost()">HOST</button>
-      <div id="roomCodeDisplay" style="display:none"></div>
-      <div class="ol-status" id="hostStatus"></div>
+      <div class="ol-card-desc">Generate a code. Share it. Your friend enters it and you're connected — for real.</div>
+      <input class="inp" id="hostNameInput" placeholder="YOUR NAME" maxlength="12" style="text-align:center;letter-spacing:4px;font-size:16px;font-family:var(--fh)">
+      <button class="btn g sm fill" id="hostBtn" onclick="onlineHost()">GENERATE CODE</button>
+      <div id="roomCodeDisplay" style="display:none;font-family:var(--fh);font-size:32px;letter-spacing:10px;color:var(--y);background:rgba(255,224,0,.08);border:1px solid rgba(255,224,0,.3);padding:10px 20px;text-align:center;margin:6px 0"></div>
+      <div class="ol-status" id="hostStatus" style="font-size:10px;letter-spacing:3px;min-height:18px;text-align:center"></div>
+      <button class="btn r sm" id="hostCancelBtn" onclick="onlineCancel()" style="display:none">CANCEL</button>
     </div>
+
+    <!-- JOIN -->
     <div class="ol-card panel">
       <div style="font-size:36px">🔗</div>
       <div class="ol-card-title" style="color:var(--c)">JOIN GAME</div>
-      <div class="ol-card-desc">Enter the room code your friend shared to connect and play.</div>
-      <input class="inp" id="joinCodeInput" placeholder="ENTER CODE" maxlength="6" style="text-align:center;letter-spacing:6px;font-size:20px;font-family:var(--fh)">
-      <button class="btn c sm fill" onclick="onlineJoin()">JOIN</button>
-      <div class="ol-status" id="joinStatus"></div>
+      <div class="ol-card-desc">Enter the 6-character code your friend generated to connect directly.</div>
+      <input class="inp" id="joinNameInput" placeholder="YOUR NAME" maxlength="12" style="text-align:center;letter-spacing:4px;font-size:16px;font-family:var(--fh)">
+      <input class="inp" id="joinCodeInput" placeholder="ENTER CODE" maxlength="6" style="text-align:center;letter-spacing:6px;font-size:22px;font-family:var(--fh);text-transform:uppercase">
+      <button class="btn c sm fill" id="joinBtn" onclick="onlineJoin()">CONNECT</button>
+      <div class="ol-status" id="joinStatus" style="font-size:10px;letter-spacing:3px;min-height:18px;text-align:center"></div>
+      <button class="btn r sm" id="joinCancelBtn" onclick="onlineCancel()" style="display:none">CANCEL</button>
     </div>
+
   </div>
-  <div style="font-size:9px;color:var(--dim);letter-spacing:3px;text-align:center;max-width:500px;margin-bottom:16px">
-    ⚠ ONLINE MODE USES SIMULATED P2P VIA LOCALSTORAGE FOR DEMOS. REAL NETWORK PLAY REQUIRES A SERVER BACKEND.
-    <br><br>FOR NOW: OPEN TWO BROWSER TABS ON THE SAME COMPUTER, HOST IN ONE, JOIN IN THE OTHER WITH THE CODE.
+
+  <!-- Connection quality / latency display -->
+  <div id="netStats" style="display:none;font-size:9px;color:var(--dim);letter-spacing:3px;text-align:center;margin-bottom:10px">
+    PING: <span id="pingVal">--</span>ms · P2P DIRECT CONNECTION
   </div>
-  <button class="btn w sm" onclick="go('sMenu')">◀ BACK</button>
+
+  <div style="font-size:9px;color:#2a2840;letter-spacing:3px;text-align:center;max-width:500px;margin-bottom:14px;line-height:1.8">
+    USES PEERJS FREE SIGNALING SERVER · NO ACCOUNT NEEDED<br>
+    WORKS BETWEEN ANY TWO DEVICES ON ANY NETWORK
+  </div>
+  <button class="btn w sm" onclick="onlineCancel();go('sMenu')">◀ BACK</button>
 </div>
 
 <!-- ═══ CRATES ══════════════════════════════ -->
@@ -1563,28 +1578,613 @@ function buildShop(tab){
   }
 }
 
-// ── ONLINE SIM ───────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  REAL ONLINE — PeerJS P2P ENGINE
+//  Uses PeerJS free signaling (peerjs.com) for WebRTC peer discovery.
+//  Once connected, all game state is sent directly peer-to-peer.
+//  No server needed after initial handshake.
+// ═══════════════════════════════════════════════════════════════════
+
+const NET = {
+  peer: null,          // Our PeerJS instance
+  conn: null,          // Active DataChannel connection
+  isHost: false,       // true = we hosted, false = we joined
+  myName: 'PLAYER',
+  oppName: 'OPPONENT',
+  roomCode: '',
+  pingInterval: null,
+  pingStart: 0,
+  latency: 0,
+  connected: false,
+  _onMsg: null,        // callback when message received
+
+  // Load PeerJS from CDN dynamically
+  loadPeerJS(cb){
+    if(window.Peer){cb();return;}
+    const s=document.createElement('script');
+    s.src='https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js';
+    s.onload=()=>cb();
+    s.onerror=()=>{setText('hostStatus','⚠ FAILED TO LOAD PEERJS. CHECK CONNECTION.');setText('joinStatus','⚠ FAILED TO LOAD PEERJS.');};
+    document.head.appendChild(s);
+  },
+
+  // Generate a human-readable 6-char room code from PeerJS ID
+  makeCode(){
+    return Math.random().toString(36).substring(2,8).toUpperCase();
+  },
+
+  // HOST: create a Peer with our room code as the peer ID prefix
+  host(name){
+    this.myName=name||'PLAYER';
+    this.isHost=true;
+    this.roomCode=this.makeCode();
+    const peerId='BRAWLBOX_'+this.roomCode;
+
+    setText('hostStatus','⏳ CONNECTING TO SIGNALING SERVER...');
+    document.getElementById('roomCodeDisplay').textContent=this.roomCode;
+    document.getElementById('roomCodeDisplay').style.display='block';
+
+    this.loadPeerJS(()=>{
+      // Destroy old peer if any
+      if(this.peer){try{this.peer.destroy();}catch(e){}}
+
+      this.peer=new Peer(peerId,{debug:0});
+
+      this.peer.on('open',()=>{
+        setText('hostStatus','✅ CODE READY · WAITING FOR OPPONENT...');
+        document.getElementById('hostBtn').style.display='none';
+        document.getElementById('hostCancelBtn').style.display='block';
+      });
+
+      this.peer.on('connection',conn=>{
+        this.conn=conn;
+        conn.on('open',()=>{
+          this.connected=true;
+          setText('hostStatus','✅ '+conn.metadata?.name?.toUpperCase()+' CONNECTED! STARTING...');
+          this.oppName=(conn.metadata?.name||'OPPONENT').toUpperCase();
+          // Send start signal with map + names
+          this.send({type:'START',map:chosenMap||'warehouse',hostName:this.myName,guestName:this.oppName});
+          this._startPing();
+          setTimeout(()=>this._launchOnlineGame(),1200);
+        });
+        conn.on('data',d=>this._handleMsg(d));
+        conn.on('close',()=>this._onDisconnect());
+        conn.on('error',e=>this._onError(e));
+      });
+
+      this.peer.on('error',e=>{
+        if(e.type==='unavailable-id'){
+          // Code taken, regenerate
+          this.roomCode=this.makeCode();
+          document.getElementById('roomCodeDisplay').textContent=this.roomCode;
+          const newId='BRAWLBOX_'+this.roomCode;
+          this.peer.destroy();
+          this.host(name);
+        } else {
+          setText('hostStatus','⚠ ERROR: '+e.type+'. TRY AGAIN.');
+        }
+      });
+    });
+  },
+
+  // JOIN: connect to host's peer ID
+  join(name,code){
+    this.myName=name||'PLAYER';
+    this.isHost=false;
+    this.roomCode=code.toUpperCase();
+    const peerId='BRAWLBOX_'+this.roomCode;
+
+    setText('joinStatus','⏳ CONNECTING...');
+    document.getElementById('joinBtn').style.display='none';
+    document.getElementById('joinCancelBtn').style.display='block';
+
+    this.loadPeerJS(()=>{
+      if(this.peer){try{this.peer.destroy();}catch(e){}}
+
+      this.peer=new Peer(null,{debug:0});
+
+      this.peer.on('open',myId=>{
+        setText('joinStatus','🔗 FOUND SERVER · DIALING HOST...');
+        const conn=this.peer.connect(peerId,{
+          reliable:true,
+          metadata:{name:this.myName}
+        });
+        this.conn=conn;
+
+        conn.on('open',()=>{
+          this.connected=true;
+          setText('joinStatus','✅ CONNECTED! WAITING FOR HOST TO START...');
+        });
+
+        conn.on('data',d=>this._handleMsg(d));
+        conn.on('close',()=>this._onDisconnect());
+        conn.on('error',e=>this._onError(e));
+      });
+
+      this.peer.on('error',e=>{
+        if(e.type==='peer-unavailable'){
+          setText('joinStatus','⚠ CODE NOT FOUND: '+this.roomCode+'. CHECK CODE AND TRY AGAIN.');
+        } else {
+          setText('joinStatus','⚠ ERROR: '+e.type);
+        }
+        document.getElementById('joinBtn').style.display='block';
+        document.getElementById('joinCancelBtn').style.display='none';
+      });
+    });
+  },
+
+  // SEND a message to the other peer
+  send(msg){
+    if(this.conn&&this.conn.open){
+      try{this.conn.send(msg);}catch(e){}
+    }
+  },
+
+  // HANDLE incoming messages
+  _handleMsg(data){
+    if(!data||!data.type)return;
+    switch(data.type){
+
+      case 'START':
+        // Guest receives this — launch game
+        this.oppName=(data.hostName||'HOST').toUpperCase();
+        chosenMap=data.map||'warehouse';
+        setText('joinStatus','🎮 GAME STARTING!');
+        this._startPing();
+        setTimeout(()=>this._launchOnlineGame(),800);
+        break;
+
+      case 'INPUT':
+        // Receive opponent's input state — apply to their controlled entity
+        if(ONLINE_GAME.remoteEnt){
+          ONLINE_GAME.applyRemoteInput(data);
+        }
+        break;
+
+      case 'STATE':
+        // Receive authoritative state snapshot from host
+        if(!this.isHost&&ONLINE_GAME.active){
+          ONLINE_GAME.applyStateSnapshot(data);
+        }
+        break;
+
+      case 'PING':
+        this.send({type:'PONG',id:data.id});
+        break;
+
+      case 'PONG':
+        this.latency=Date.now()-this.pingStart;
+        const pv=document.getElementById('pingVal');
+        if(pv)pv.textContent=this.latency;
+        break;
+
+      case 'REMATCH':
+        // Opponent wants rematch
+        if(ONLINE_GAME.onRematchRequest) ONLINE_GAME.onRematchRequest();
+        break;
+
+      case 'DISCONNECT':
+        this._onDisconnect();
+        break;
+    }
+  },
+
+  _startPing(){
+    clearInterval(this.pingInterval);
+    this.pingInterval=setInterval(()=>{
+      this.pingStart=Date.now();
+      this.send({type:'PING',id:this.pingStart});
+    },2000);
+    document.getElementById('netStats').style.display='block';
+  },
+
+  _onDisconnect(){
+    this.connected=false;
+    clearInterval(this.pingInterval);
+    if(ONLINE_GAME.active){
+      ONLINE_GAME.active=false;
+      G.ann('OPPONENT DISCONNECTED');
+      setTimeout(()=>go('sMenu'),2500);
+    } else {
+      setText('hostStatus','⚠ CONNECTION LOST.');
+      setText('joinStatus','⚠ CONNECTION LOST.');
+    }
+  },
+
+  _onError(e){
+    console.warn('PeerJS error:',e);
+  },
+
+  _launchOnlineGame(){
+    document.getElementById('netStats').style.display='block';
+    // Reset UI
+    document.getElementById('hostBtn').style.display='block';
+    document.getElementById('hostCancelBtn').style.display='none';
+    document.getElementById('joinBtn').style.display='block';
+    document.getElementById('joinCancelBtn').style.display='none';
+    document.getElementById('roomCodeDisplay').style.display='none';
+    setText('hostStatus','');setText('joinStatus','');
+    ONLINE_GAME.start();
+  },
+
+  cancel(){
+    clearInterval(this.pingInterval);
+    this.connected=false;
+    if(this.conn){try{this.conn.close();}catch(e){}}
+    if(this.peer){try{this.peer.destroy();}catch(e){}}
+    this.conn=null;this.peer=null;
+    document.getElementById('roomCodeDisplay').style.display='none';
+    document.getElementById('roomCodeDisplay').textContent='';
+    document.getElementById('hostBtn').style.display='block';
+    document.getElementById('hostCancelBtn').style.display='none';
+    document.getElementById('joinBtn').style.display='block';
+    document.getElementById('joinCancelBtn').style.display='none';
+    setText('hostStatus','');setText('joinStatus','');
+    document.getElementById('netStats').style.display='none';
+  }
+};
+
+// ── ONLINE GAME ENGINE ───────────────────────────────────────────────
+// Separate from the main G engine — handles the P2P game loop.
+// Host runs the authoritative simulation, sends snapshots.
+// Guest sends inputs, receives state, renders authoritative positions.
+const ONLINE_GAME = {
+  active: false,
+  localEnt: null,    // Entity we control
+  remoteEnt: null,   // Entity the opponent controls
+  platforms: [],
+  bullets: [],
+  particles: [],
+  explosions: [],
+  healPacks: [],
+  pickups: [],
+  roundTimer: 120*60,
+  tick: 0,
+  score: {local:0, remote:0},
+  _raf: null,
+  _stateInterval: null,
+  _inputInterval: null,
+  onRematchRequest: null,
+
+  // Local input state we send each frame
+  localInput: {l:0,r:0,u:0,f:0,sh:0,q:0,e:0,r:0},
+
+  start(){
+    G.active=false;
+    if(this._raf)cancelAnimationFrame(this._raf);
+    clearInterval(this._stateInterval);
+    clearInterval(this._inputInterval);
+
+    document.querySelectorAll('.scr').forEach(s=>s.classList.remove('on'));
+    document.getElementById('hud').style.display='block';
+    document.getElementById('ctrl-hint').textContent='WASD MOVE · F ATTACK · Q SPECIAL · SHIFT DASH · E HEAL/PICKUP';
+    document.getElementById('kf').innerHTML='';
+    document.getElementById('ann').innerHTML='';
+
+    this.active=true;
+    this.tick=0;
+    this.roundTimer=120*60;
+    this.score={local:0,remote:0};
+    this.bullets=[];this.particles=[];this.explosions=[];
+
+    const map=chosenMap||'warehouse';
+    this.platforms=buildPlatforms(map,CV.width,CV.height);
+
+    // Local entity (P1 side)
+    const localSkin=PS.equip.skin||'krix_default';
+    this.localEnt=new Ent({
+      x:NET.isHost?CV.width*.15:CV.width*.82,
+      y:CV.height-220,
+      skin:localSkin,wepId:PS.equip.wep||'fists',efx:PS.equip.efx||'none',
+      isP:true,pIdx:0,team:NET.isHost?0:1,
+      name:NET.myName.toUpperCase(),
+      maxHp:500,hp:500,maxSp:150,sp:0,speed:5
+    });
+
+    // Remote entity (opponent)
+    const remSkin=NET.isHost?'krix_cobalt':'krix_default';
+    this.remoteEnt=new Ent({
+      x:NET.isHost?CV.width*.82:CV.width*.15,
+      y:CV.height-220,
+      skin:remSkin,wepId:'fists',efx:'none',
+      isP:false,pIdx:1,team:NET.isHost?1:0,
+      name:NET.oppName.toUpperCase(),
+      maxHp:500,hp:500,maxSp:150,sp:0,speed:5
+    });
+
+    // Weapon pickups
+    const wkeys=Object.keys(WP).filter(w=>w!=='fists');
+    this.pickups=[[.26,.62],[.5,.49],[.75,.62],[.35,.36],[.63,.36],[.11,.44],[.87,.44],[.5,.23]]
+      .map(([rx,ry])=>({x:CV.width*rx,y:CV.height*ry,wid:wkeys[Math.floor(Math.random()*wkeys.length)],t:0,gone:false}));
+    this.healPacks=[[.5,.74],[.25,.74],[.75,.74]]
+      .map(([rx,ry])=>({x:CV.width*rx,y:CV.height*ry,t:0,gone:false,respawnIn:0}));
+
+    // Update HUD names
+    setText('h1sk',skinEmoji(localSkin));
+    setText('h2n',NET.oppName);
+    setText('h2sk',skinEmoji(remSkin));
+    setText('hRnd','ONLINE 1V1');
+
+    G.ann('ONLINE FIGHT!');
+
+    // Send inputs at 20hz
+    this._inputInterval=setInterval(()=>this._sendInput(),50);
+
+    // Host sends authoritative state at 20hz
+    if(NET.isHost){
+      this._stateInterval=setInterval(()=>this._sendState(),50);
+    }
+
+    this._loop();
+  },
+
+  _loop(){
+    if(!this.active)return;
+    this._raf=requestAnimationFrame(()=>this._loop());
+    this.tick++;
+    this._update();
+    this._render();
+  },
+
+  _update(){
+    // Timer
+    if(this.tick%60===0&&this.roundTimer>0){
+      this.roundTimer=Math.max(0,this.roundTimer-60);
+      this._updHUD();
+    }
+    if(this.roundTimer<=0){this._end();return;}
+
+    // Read local keys → store in localInput
+    const li=this.localInput;
+    li.l=K['KeyA']?1:0; li.r=K['KeyD']?1:0;
+    li.u=(K['KeyW']||K['Space'])?1:0;
+    li.f=(K['KeyF']||K['KeyZ'])?1:0;
+    li.sh=(K['ShiftLeft']||K['ShiftRight'])?1:0;
+    // Q handled on keydown event below
+
+    // Apply local input to local entity
+    this._applyInput(this.localEnt, li);
+    G.physics.call({platforms:this.platforms}, this.localEnt);
+
+    // If host: also simulate remote entity from received inputs
+    if(NET.isHost){
+      if(this.remoteEnt._lastInput)this._applyInput(this.remoteEnt, this.remoteEnt._lastInput);
+      G.physics.call({platforms:this.platforms}, this.remoteEnt);
+      this._tickBullets();
+    } else {
+      // Guest: just physics the remote entity from snapshot positions (lerp)
+      if(this.remoteEnt._snapX!==undefined){
+        this.remoteEnt.x+=(this.remoteEnt._snapX-this.remoteEnt.x)*.25;
+        this.remoteEnt.y+=(this.remoteEnt._snapY-this.remoteEnt.y)*.25;
+      }
+      // Guest still does local bullet physics for visual smoothness
+      this._tickBulletsLocal();
+    }
+
+    this.localEnt.doTick();
+    this.remoteEnt.doTick();
+    this.particles=this.particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.09;p.life--;p.a=p.life/p.ml;return p.life>0;});
+    this.explosions=this.explosions.filter(e=>{e.r+=e.maxR/e.life*.8;e.life--;return e.life>0;});
+    this.pickups.forEach(pk=>pk.t+=.05);
+    this.healPacks.forEach(hp=>{hp.t+=.04;if(hp.gone){hp.respawnIn--;if(hp.respawnIn<=0)hp.gone=false;}});
+
+    // Death check
+    if(this.localEnt.dead&&!this._ended){this._end();return;}
+    if(this.remoteEnt.dead&&!this._ended){this._end();return;}
+
+    // Fast HUD bars
+    const le=this.localEnt,re=this.remoteEnt;
+    setW('b1h',(le.hp/le.maxHp*100)+'%');setW('b1s',(le.sp/le.maxSp*100)+'%');setW('b1e',le.energy+'%');
+    setW('b2h',(re.hp/re.maxHp*100)+'%');setW('b2s',(re.sp/re.maxSp*100)+'%');
+  },
+
+  _applyInput(p, inp){
+    if(p.stun>0)return;
+    if(inp.l){p.vx-=1.5;p.face=-1;}
+    if(inp.r){p.vx+=1.5;p.face=1;}
+    if(inp.u&&p.grnd){p.vy=-17;p.grnd=false;}
+    if(inp.sh&&(p.dashCd||0)<=0){p.vx+=p.face*19;p.inv=14;p.dashCd=34;G.burst.call(G,p.cx,p.cy,p.oc,7);}
+    if(p.dashCd>0)p.dashCd--;
+    if(inp.f&&p.atkCd<=0){this._attack(p);p.atkCd=p.atkCdMax;}
+    if(p.wep?.auto&&inp.f&&p.atkCd<=0){this._attack(p);p.atkCd=p.atkCdMax;}
+  },
+
+  _attack(p){
+    const w=p.wep;if(!w)return;
+    if(p.ammo===0)return;if(p.ammo>0)p.ammo--;
+    if(p.isP)G.buildAmmoUI.call(G); // update UI if local
+    const other=p===this.localEnt?this.remoteEnt:this.localEnt;
+    if(w.type==='melee'){
+      const hx=p.face===1?p.x+p.w:p.x-w.rng,hy=p.y-10;
+      if(rHit(hx,hy,w.rng,p.h+20,other.x,other.y,other.w,other.h)){
+        const dmg=w.dmg+(Math.random()-.25)*6|0;
+        other.hit(dmg,p);
+        dmgNum(other.cx,other.cy,dmg,w.col);
+        other.vx+=p.face*5;other.vy-=3;
+        G.slash.call(G,p.face===1?p.x+p.w+w.rng*.4:p.x-w.rng*.4,p.cy,w.col);
+        if(NET.isHost)NET.send({type:'INPUT',hitEnt:other===this.remoteEnt?'remote':'local',dmg});
+      }
+    } else {
+      const pls=w.pl||1;
+      for(let i=0;i<pls;i++){
+        const sp=w.pl?(Math.random()-.5)*.42:0;
+        const spd=w.type==='explosive'?9:12+(p.wepId==='sniper'?6:0);
+        this.bullets.push({x:p.cx+p.face*30,y:p.cy,vx:p.face*spd+sp,vy:(Math.random()-.5)*.4+sp,dmg:w.dmg,life:Math.ceil(w.rng/spd*1.35),own:p,col:w.col,type:w.type,r:p.wepId==='rocket'?9:2,team:p.team});
+      }
+      p.vx-=p.face*1.5;
+      G.muzzle.call(G,p.face===1?p.x+p.w:p.x-8,p.cy,w.col);
+    }
+  },
+
+  _tickBullets(){
+    // Authoritative (host only)
+    this.bullets=this.bullets.filter(b=>{
+      b.x+=b.vx;b.y+=b.vy;b.life--;if(b.life<=0)return false;
+      for(const pl of this.platforms)if(rHit(b.x-2,b.y-2,4,4,pl.x,pl.y,pl.w,pl.h)){if(b.type==='explosive')G.explode.call(G,b.x,b.y,b.dmg,b.own);return false;}
+      for(const t of [this.localEnt,this.remoteEnt]){
+        if(t.dead||t.team===b.team)continue;
+        if(rHit(b.x-b.r,b.y-b.r,b.r*2,b.r*2,t.x,t.y,t.w,t.h)){
+          if(b.type==='explosive'){G.explode.call(G,b.x,b.y,b.dmg,b.own);return false;}
+          t.hit(b.dmg,b.own);dmgNum(t.cx,t.cy,b.dmg,b.col);return false;
+        }
+      }
+      return true;
+    });
+  },
+
+  _tickBulletsLocal(){
+    // Visual only for guest (no damage — trust host snapshots)
+    this.bullets=this.bullets.filter(b=>{b.x+=b.vx;b.y+=b.vy;b.life--;return b.life>0;});
+  },
+
+  applyRemoteInput(data){
+    // Store opponent's latest input for host to simulate
+    if(this.remoteEnt) this.remoteEnt._lastInput=data;
+  },
+
+  applyStateSnapshot(data){
+    // Guest applies host's authoritative state
+    if(!data)return;
+    if(data.rx!==undefined){this.remoteEnt._snapX=data.rx;this.remoteEnt._snapY=data.ry;}
+    if(data.lhp!==undefined){
+      this.localEnt.hp=data.lhp;this.localEnt.sp=data.lsp||0;
+      this.remoteEnt.hp=data.rhp;this.remoteEnt.sp=data.rsp||0;
+    }
+    // Sync bullets from host
+    if(data.bullets){this.bullets=data.bullets;}
+  },
+
+  _sendInput(){
+    if(!NET.connected||!this.active)return;
+    const li=this.localInput;
+    NET.send({type:'INPUT',l:li.l,r:li.r,u:li.u,f:li.f,sh:li.sh,face:this.localEnt?.face||1});
+  },
+
+  _sendState(){
+    // Host sends authoritative positions + health
+    if(!NET.connected||!this.active||!NET.isHost)return;
+    NET.send({type:'STATE',
+      rx:this.localEnt.x,ry:this.localEnt.y, // from remote's perspective, our pos is "remote"
+      lhp:this.remoteEnt.hp,lsp:this.remoteEnt.sp, // their hp
+      rhp:this.localEnt.hp,rsp:this.localEnt.sp,    // our hp from their view
+      bullets:this.bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy,life:b.life,col:b.col,r:b.r,type:b.type,dmg:b.dmg,team:b.team}))
+    });
+  },
+
+  _updHUD(){
+    const secs=Math.max(0,Math.ceil(this.roundTimer/60));
+    const m=Math.floor(secs/60),s=secs%60;
+    const ht=document.getElementById('hTim');
+    if(ht){ht.textContent=`${m}:${s<10?'0':''}${s}`;ht.className='h-tim'+(secs<=30?' low':'');}
+    setText('hScr',`YOU ${this.score.local} · THEM ${this.score.remote}`);
+  },
+
+  _ended:false,
+  _end(){
+    if(this._ended)return;this._ended=true;
+    this.active=false;
+    cancelAnimationFrame(this._raf);
+    clearInterval(this._stateInterval);
+    clearInterval(this._inputInterval);
+    document.getElementById('hud').style.display='none';
+    const localWon=this.remoteEnt.dead&&!this.localEnt.dead;
+    const ttl=document.getElementById('rsTtl');
+    ttl.textContent=localWon?'VICTORY':'DEFEAT';
+    ttl.className='res-win '+(localWon?'w':'l');
+    setText('rsMode','ONLINE 1V1 · '+(MAPS[chosenMap]||{name:'?'}).name);
+    const le=this.localEnt;
+    setText('rsK',le.kills||0);setText('rsD',le.dmgDealt||0);setText('rsH',le.heals||0);
+    setText('rsA',le.shots>0?Math.round((le.hits||0)/le.shots*100)+'%':'-');
+    const coins=localWon?40:10;PS.coins+=coins;save();updCoins();setText('rsC','+'+coins+' ⬡');
+    // Rematch button sends signal
+    this.onRematchRequest=()=>{G.ann('OPPONENT WANTS REMATCH!');};
+    go('sResults');
+    // Override rematch button for online
+    const rb=document.querySelector('.res-btns .btn.r');
+    if(rb){rb.onclick=()=>{NET.send({type:'REMATCH'});this._ended=false;this.start();};}
+  },
+
+  _render(){
+    const W=CV.width,H=CV.height;
+    CX.clearRect(0,0,W,H);
+    const m=MAPS[chosenMap||'warehouse']||MAPS.warehouse;
+    const bg=CX.createRadialGradient(W/2,H*.6,0,W/2,H*.5,Math.max(W,H)*.75);
+    bg.addColorStop(0,m.bg[0]);bg.addColorStop(1,m.bg[1]);
+    CX.fillStyle=bg;CX.fillRect(0,0,W,H);
+    CX.strokeStyle=m.gridCol;CX.lineWidth=1;
+    for(let x=0;x<W;x+=46){CX.beginPath();CX.moveTo(x,0);CX.lineTo(x,H);CX.stroke();}
+    for(let y=0;y<H;y+=46){CX.beginPath();CX.moveTo(0,y);CX.lineTo(W,y);CX.stroke();}
+    this.platforms.forEach(pl=>drawPlat(pl,m));
+    this.pickups.forEach(pk=>{if(!pk.gone)drawPickup(pk);});
+    this.healPacks.forEach(hp=>{if(!hp.gone)drawHealPack(hp);});
+    this.particles.forEach(p=>{CX.save();CX.globalAlpha=p.a;CX.fillStyle=p.col;CX.fillRect(p.x-p.sz/2,p.y-p.sz/2,p.sz,p.sz);CX.restore();});
+    this.explosions.forEach(e=>{CX.save();CX.globalAlpha=(e.life/e.maxL)*.5;CX.beginPath();CX.arc(e.x,e.y,e.r,0,Math.PI*2);CX.strokeStyle=e.col||'#ff6600';CX.lineWidth=4;CX.stroke();CX.globalAlpha=(e.life/e.maxL)*.1;CX.fillStyle=e.col||'#ff6600';CX.fill();CX.restore();});
+    this.bullets.forEach(b=>{CX.save();CX.shadowBlur=12;CX.shadowColor=b.col;CX.fillStyle=b.col;CX.fillRect(b.x-b.r,b.y-b.r,b.r*2,b.r*2);CX.restore();});
+    if(!this.localEnt.dead)drawEnt(this.localEnt);
+    if(!this.remoteEnt.dead)drawEnt(this.remoteEnt);
+    // Ping overlay
+    if(NET.latency>0){
+      CX.save();CX.globalAlpha=.4;CX.font='9px "Courier Prime"';CX.fillStyle=NET.latency<80?'#00ff6a':NET.latency<150?'#ffe000':'#ff1533';
+      CX.textAlign='right';CX.fillText(NET.latency+'ms',W-20,H-16);CX.restore();
+    }
+  }
+};
+
+// ── PHYSICS helper exposed for ONLINE_GAME to borrow ─────────────────
+// (mirrors G.physics — needed since ONLINE_GAME isn't G)
+(function patchPhysics(){
+  const orig=G.physics.bind(G);
+  G.physics=function(p){
+    // G.physics uses this.platforms — ONLINE_GAME calls it via .call({platforms:...})
+    const plats=(this&&this.platforms)||G.platforms||[];
+    p.vy+=0.62;p.vx*=0.77;
+    p.vx=clamp(p.vx,-14,14);p.vy=clamp(p.vy,-24,22);
+    p.x+=p.vx;p.y+=p.vy;p.grnd=false;
+    plats.forEach(pl=>{
+      if(p.x+p.w>pl.x+4&&p.x<pl.x+pl.w-4){
+        if(p.y+p.h>pl.y&&p.y+p.h<pl.y+pl.h+Math.max(0,p.vy)+8&&p.vy>=0){p.y=pl.y-p.h;p.vy=0;p.grnd=true;}
+        if(p.y<pl.y+pl.h&&p.y>pl.y+pl.h-8&&p.vy<0){p.y=pl.y+pl.h;p.vy=1;}
+      }
+      if(p.y+p.h>pl.y+5&&p.y<pl.y+pl.h-5){
+        if(p.x+p.w>pl.x&&p.x+p.w<pl.x+14&&p.vx>0){p.x=pl.x-p.w;p.vx=0;}
+        if(p.x<pl.x+pl.w&&p.x>pl.x+pl.w-14&&p.vx<0){p.x=pl.x+pl.w;p.vx=0;}
+      }
+    });
+    if(p.y>CV.height+90){p.dead=true;G.burst(p.cx,p.cy-50,p.oc,30);G.kfeed('PIT',p.name,'💀');}
+  };
+})();
+
+// Q key for online special
+addEventListener('keydown',e=>{
+  if(e.code==='KeyQ'&&ONLINE_GAME.active){
+    const p=ONLINE_GAME.localEnt;
+    if(p&&!p.dead&&p.spCd<=0&&p.energy>=80){
+      p.energy=0;p.spCd=220;p.inv=28;p.vx=p.face*24;p.vy=-11;
+      p.specialsUsed=(p.specialsUsed||0)+1;
+      ONLINE_GAME.explosions.push({x:p.cx,y:p.cy,r:10,maxR:220,life:22,maxL:22,col:'#c800ff'});
+      G.burst(p.cx,p.cy,'#c800ff',20);
+      const other=ONLINE_GAME.remoteEnt;
+      if(other&&!other.dead){const dist=Math.sqrt((other.cx-p.cx)**2+(other.cy-p.cy)**2);if(dist<220){other.hit(40,p);other.vx=(other.cx>p.cx?1:-1)*14;other.vy=-10;dmgNum(other.cx,other.cy,40,'#c800ff');}}
+      NET.send({type:'INPUT',special:true});
+      G.ann('SPECIAL!');
+    }
+  }
+});
+
+// UI ENTRY POINTS
 function onlineHost(){
-  const code=Math.random().toString(36).substring(2,8).toUpperCase();
-  document.getElementById('roomCodeDisplay').textContent=code;document.getElementById('roomCodeDisplay').style.display='block';
-  setText('hostStatus','WAITING FOR PLAYER TO JOIN...');
-  localStorage.setItem('bb4_room_'+code,JSON.stringify({host:true,state:'waiting',ts:Date.now()}));
-  // Poll for join
-  const poll=setInterval(()=>{
-    const room=JSON.parse(localStorage.getItem('bb4_room_'+code)||'{}');
-    if(room.state==='joined'){clearInterval(poll);setText('hostStatus','PLAYER JOINED! STARTING...');setTimeout(()=>G.start('duel','warehouse'),1500);}
-    if(Date.now()-room.ts>120000){clearInterval(poll);setText('hostStatus','ROOM EXPIRED.');}
-  },1000);
+  const name=(document.getElementById('hostNameInput').value||'PLAYER').trim();
+  NET.host(name);
 }
 function onlineJoin(){
+  const name=(document.getElementById('joinNameInput').value||'PLAYER').trim();
   const code=(document.getElementById('joinCodeInput').value||'').toUpperCase().trim();
-  if(!code){setText('joinStatus','ENTER A CODE FIRST');return;}
-  const room=JSON.parse(localStorage.getItem('bb4_room_'+code)||'{}');
-  if(!room.host){setText('joinStatus','ROOM NOT FOUND: '+code);return;}
-  if(room.state!=='waiting'){setText('joinStatus','ROOM ALREADY IN USE');return;}
-  room.state='joined';localStorage.setItem('bb4_room_'+code,JSON.stringify(room));
-  setText('joinStatus','JOINING... STARTING GAME!');
-  setTimeout(()=>G.start('duel','warehouse'),1500);
+  if(!code){setText('joinStatus','⚠ ENTER A CODE FIRST');return;}
+  if(code.length!==6){setText('joinStatus','⚠ CODE MUST BE 6 CHARACTERS');return;}
+  NET.join(name,code);
+}
+function onlineCancel(){
+  NET.cancel();
 }
 
 // ── UTILS ────────────────────────────────────────────────────────────
