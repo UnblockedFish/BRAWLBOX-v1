@@ -1077,8 +1077,8 @@ const G={
 
     // Jump to reach targets on higher platforms
     if(p.grnd&&dy<-80&&Math.random()<.04*ai.skill) p.vy=-15;
-    // Periodic random strafe
-    if(T%90===0&&Math.random()<.4) p.vx+=(Math.random()-.5)*4;
+    // Periodic random strafe — use this.tick not T (T is scoped to update())
+    if(this.tick%90===0&&Math.random()<.4) p.vx+=(Math.random()-.5)*4;
 
     // Pick up weapons from drops
     if(Math.random()<.02*ai.skill){
