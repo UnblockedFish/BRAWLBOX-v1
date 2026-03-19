@@ -511,6 +511,15 @@ canvas{position:fixed;inset:0;display:block}
 
 <script>
 'use strict';
+// Global error catcher — shows errors on screen instead of silently dying
+window.onerror=function(msg,src,line,col,err){
+  const d=document.createElement('div');
+  d.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#ff1533;color:#fff;font-family:monospace;font-size:12px;padding:8px 12px;z-index:99999;white-space:pre-wrap';
+  d.textContent='ERROR: '+msg+'\nLine '+line+':'+col;
+  document.body.appendChild(d);
+  setTimeout(()=>d.remove(),8000);
+  return false;
+};
 // ═══════════════════════════════════════════════════════════════
 //  BRAWLBOX v5 — KRIX EDITION  (Complete Rebuild)
 // ═══════════════════════════════════════════════════════════════
@@ -885,26 +894,44 @@ const G={
   roundTimer:0, score:0, wave:1, combo:0, comboTick:0, _raf:null,
 
   start(mode,mapId){
+    // Cancel any running game loop first
+    if(this._raf){cancelAnimationFrame(this._raf);this._raf=null;}
+    clearTimeout(this._dropTO); clearTimeout(this._healTO);
     clearTimeout(voteTickTO);
+
     this.mode=mode; this.currentMap=mapId||'warehouse';
+    this.active=false; // pause briefly so old loop stops
+
     document.querySelectorAll('.scr').forEach(s=>s.classList.remove('on'));
     document.getElementById('hud').style.display='block';
     document.getElementById('ctrl-hint').style.display='block';
     document.getElementById('kf').innerHTML='';
     document.getElementById('ann').innerHTML='';
     document.getElementById('combo').style.opacity='0';
-    this.active=true; this.tick=0; this.score=0; this.wave=1; this.combo=0; this.comboTick=0;
+
+    this.tick=0; this.score=0; this.wave=1; this.combo=0; this.comboTick=0;
     this.bullets=[]; this.particles=[]; this.explosions=[]; this.drops=[]; this.healPacks=[];
+    this.players=[];
     this.roundTimer=mode==='training'?999*60:120*60;
     this.buildArena();
 
+    // Validate equipped skin — fall back to default if missing
+    const skinId=SK[PS.equip.skin]?PS.equip.skin:'krix_default';
+    const efxId=EFX[PS.equip.efx]?PS.equip.efx:'none';
+
     // Player 1
-    const p1=new Ent({x:CV.width*.14,y:CV.height-220,skin:PS.equip.skin,wepId:'fists',efx:PS.equip.efx,isP:true,pIdx:0,team:0,name:PS.playerName,maxHp:500,hp:500,maxSp:150,sp:0,speed:5});
+    const p1=new Ent({x:CV.width*.14,y:CV.height-220,skin:skinId,wepId:'fists',efx:efxId,isP:true,pIdx:0,team:0,name:PS.playerName||'KRIX',maxHp:500,hp:500,maxSp:150,sp:0,speed:5});
     this.players=[p1];
 
-    const skK=Object.keys(SK),wK=Object.keys(WP).filter(w=>w!=='fists');
+    const skK=Object.keys(SK);
     const names=['SKEX','VOLT','RUIN','VORN','DUSK','FANG','NOVA','REXX','BLADE','ZERO'];
-    const mkCPU=(team,name,x,pIdx)=>new Ent({x,y:CV.height-220,skin:skK[Math.floor(Math.random()*skK.length)],wepId:'fists',efx:'none',isP:false,pIdx:pIdx??99,team,name,maxHp:500,hp:500,maxSp:100,sp:0,speed:3+Math.random()*.8,ai:{skill:0.7+Math.random()*.3}});
+    const mkCPU=(team,name,x)=>new Ent({
+      x,y:CV.height-220,
+      skin:skK[Math.floor(Math.random()*skK.length)],
+      wepId:'fists',efx:'none',isP:false,pIdx:99,team,name,
+      maxHp:500,hp:500,maxSp:100,sp:0,speed:3+Math.random()*.8,
+      ai:{skill:0.7+Math.random()*.3}
+    });
 
     if(mode==='duel')   this.players.push(mkCPU(1,names[0],CV.width*.84));
     if(mode==='squad'){
@@ -919,10 +946,15 @@ const G={
       document.getElementById('ctrl-hint').textContent='P1: WASD+F+Q  ·  P2: ARROWS+L+.';
     }
     if(mode==='survival') this.spawnWave();
+
     this.scheduleDrops();
     this.scheduleHeals();
-    this.buildAmmoUI(); this.updHUD(); this.ann('FIGHT!');
+    this.buildAmmoUI();
+    this.updHUD();
+    this.ann('FIGHT!');
     if(mode==='training') this.ann('TRAINING');
+
+    this.active=true; // now start
     this.loop();
   },
 
@@ -973,10 +1005,18 @@ const G={
     }
   },
 
-  loop(){if(!this.active)return;this._raf=requestAnimationFrame(()=>this.loop());this.tick++;this.update();this.render();},
+  loop(){
+    if(!this.active)return;
+    this._raf=requestAnimationFrame(()=>this.loop());
+    this.tick++;
+    try{this.update();}catch(e){console.error('update error:',e);}
+    try{this.render();}catch(e){console.error('render error:',e);}
+  },
 
   stop(win){
-    this.active=false; cancelAnimationFrame(this._raf);
+    this.active=false;
+    if(this._raf){cancelAnimationFrame(this._raf);this._raf=null;}
+    clearTimeout(this._dropTO); clearTimeout(this._healTO);
     document.getElementById('hud').style.display='none';
     this.showResults(win);
   },
